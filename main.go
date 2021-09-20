@@ -113,11 +113,9 @@ func configureMetrics() (info, timestamp, history *prometheus.GaugeVec) {
 		}, []string{
 			"chart",
 			"release",
-			"version",
+			"revision",
 			"appVersion",
 			"updated",
-			"namespace",
-			"latestVersion",
 		})
 	}
 
@@ -130,6 +128,9 @@ func runStats(config config.Config, info, timestamp, history *prometheus.GaugeVe
 	}
 	if timestamp != nil {
 		timestamp.Reset()
+	}
+	if history != nil {
+		history.Reset()
 	}
 
 	for _, client := range clients.Items() {
@@ -160,6 +161,22 @@ func runStats(config config.Config, info, timestamp, history *prometheus.GaugeVe
 			if timestamp != nil {
 				timestamp.WithLabelValues(chart, releaseName, version, appVersion, strconv.FormatInt(updated, 10), namespace, latestVersion).Set(float64(updated))
 			}
+			if history != nil {
+				historyInfo := action.NewHistory(client.(*action.Configuration))
+
+				historyItems, err := historyInfo.Run(releaseName)
+				if err != nil {
+					log.Warnf("got error while listing %v history : %v", releaseName, err)
+					continue
+				}
+				for _, historyItem := range historyItems {
+					updated := historyItem.Info.LastDeployed.Unix() * 1000
+					revision := historyItem.Version
+					status := statusCodeMap[historyItem.Info.Status.String()]
+					history.WithLabelValues(chart, releaseName, strconv.Itoa(revision), appVersion, strconv.FormatInt(updated, 10)).Set(status)
+				}
+			}
+
 		}
 	}
 }
