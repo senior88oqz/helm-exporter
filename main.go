@@ -4,7 +4,6 @@ import (
 	"flag"
 	"net/http"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -16,9 +15,6 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	"os"
-
-	// Import to initialize client auth plugins.
-	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
 	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/cli"
@@ -132,52 +128,55 @@ func runStats(config config.Config, info, timestamp, history *prometheus.GaugeVe
 	if history != nil {
 		history.Reset()
 	}
+	actionConfig := new(action.Configuration)
+	err := actionConfig.Init(settings.RESTClientGetter(), "", os.Getenv("HELM_DRIVER"), log.Infof)
 
-	for _, client := range clients.Items() {
-		list := action.NewList(client.(*action.Configuration))
-		items, err := list.Run()
-		if err != nil {
-			log.Warnf("got error while listing %v", err)
-			continue
+	if err != nil {
+		log.Warnf("got error while creating actionConfig %v", err)
+	}
+	list := action.NewList(actionConfig)
+	items, err := list.Run()
+	if err != nil {
+		log.Warnf("got error while listing %v", err)
+	}
+
+	for _, item := range items {
+		chart := item.Chart.Name()
+		releaseName := item.Name
+		version := item.Chart.Metadata.Version
+		appVersion := item.Chart.AppVersion()
+		updated := item.Info.LastDeployed.Unix() * 1000
+		namespace := item.Namespace
+		status := statusCodeMap[item.Info.Status.String()]
+		latestVersion := ""
+
+		if *fetchLatest {
+			latestVersion = getLatestChartVersionFromHelm(item.Chart.Name(), config.HelmRegistries)
 		}
 
-		for _, item := range items {
-			chart := item.Chart.Name()
-			releaseName := item.Name
-			version := item.Chart.Metadata.Version
-			appVersion := item.Chart.AppVersion()
-			updated := item.Info.LastDeployed.Unix() * 1000
-			namespace := item.Namespace
-			status := statusCodeMap[item.Info.Status.String()]
-			latestVersion := ""
-
-			if *fetchLatest {
-				latestVersion = getLatestChartVersionFromHelm(item.Chart.Name(), config.HelmRegistries)
-			}
-
-			if info != nil {
-				info.WithLabelValues(chart, releaseName, version, appVersion, strconv.FormatInt(updated, 10), namespace, latestVersion).Set(status)
-			}
-			if timestamp != nil {
-				timestamp.WithLabelValues(chart, releaseName, version, appVersion, strconv.FormatInt(updated, 10), namespace, latestVersion).Set(float64(updated))
-			}
-			if history != nil {
-				historyInfo := action.NewHistory(client.(*action.Configuration))
-
-				historyItems, err := historyInfo.Run(releaseName)
-				if err != nil {
-					log.Warnf("got error while listing %v history : %v", releaseName, err)
-					continue
-				}
-				for _, historyItem := range historyItems {
-					updated := historyItem.Info.LastDeployed.Unix() * 1000
-					revision := historyItem.Version
-					status := statusCodeMap[historyItem.Info.Status.String()]
-					history.WithLabelValues(chart, releaseName, strconv.Itoa(revision), appVersion, strconv.FormatInt(updated, 10)).Set(status)
-				}
-			}
-
+		if info != nil {
+			info.WithLabelValues(chart, releaseName, version, appVersion, strconv.FormatInt(updated, 10), namespace, latestVersion).Set(status)
 		}
+		if timestamp != nil {
+			timestamp.WithLabelValues(chart, releaseName, version, appVersion, strconv.FormatInt(updated, 10), namespace, latestVersion).Set(float64(updated))
+		}
+		if history != nil {
+			histActionConfig := new(action.Configuration)
+			err := histActionConfig.Init(settings.RESTClientGetter(), namespace, os.Getenv("HELM_DRIVER"), log.Infof)
+			historyInfo := action.NewHistory(histActionConfig)
+			historyItems, err := historyInfo.Run(releaseName)
+			if err != nil {
+				log.Warnf("got error while listing %v history : %v", releaseName, err)
+				continue
+			}
+			for _, historyItem := range historyItems {
+				updated := historyItem.Info.LastDeployed.Unix() * 1000
+				revision := historyItem.Version
+				status := statusCodeMap[historyItem.Info.Status.String()]
+				history.WithLabelValues(chart, releaseName, strconv.Itoa(revision), appVersion, strconv.FormatInt(updated, 10)).Set(status)
+			}
+		}
+
 	}
 }
 
@@ -292,13 +291,13 @@ func main() {
 		log.Fatalf("invalid duration `%s`: %s", *intervalDuration, err)
 	}
 
-	if namespaces == nil || *namespaces == "" {
-		go informer()
-	} else {
-		for _, namespace := range strings.Split(*namespaces, ",") {
-			connect(namespace)
-		}
-	}
+	// if namespaces == nil || *namespaces == "" {
+	// 	go informer()
+	// } else {
+	// 	for _, namespace := range strings.Split(*namespaces, ",") {
+	// 		connect(namespace)
+	// 	}
+	// }
 
 	if runIntervalDuration != 0 {
 		go runStatsPeriodically(runIntervalDuration, config)
