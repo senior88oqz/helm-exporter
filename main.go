@@ -211,6 +211,12 @@ func registerMetrics(register prometheus.Registerer, info, timestamp, history *p
 	}
 	register.MustRegister(timestamp)
 	statsTimestamp = timestamp
+
+	if statsHistory != nil {
+		register.Unregister(statsHistory)
+	}
+	register.MustRegister(history)
+	statsHistory = history
 }
 
 func newHelmStatsHandler(config config.Config, synchrone bool) http.HandlerFunc {
