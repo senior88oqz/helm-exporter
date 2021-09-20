@@ -227,7 +227,7 @@ func newHelmStatsHandler(config config.Config, synchrone bool) http.HandlerFunc 
 }
 
 func healthz(w http.ResponseWriter, r *http.Request) {
-
+	w.WriteHeader(http.StatusOK)
 }
 
 func connect(namespace string) {
